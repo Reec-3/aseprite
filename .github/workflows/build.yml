@@ -1,38 +1,44 @@
-name: build
-on: [push, pull_request]
+name: Build Aseprite (Windows Release GUI)
+
+on:
+  push:
+    branches:
+      - main # Trigger on pushes to your main branch
+  workflow_dispatch: # Allows manual triggering
+
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
+    # We simplify the matrix to a single, desired combination
+    runs-on: windows-latest
     strategy:
-      fail-fast: false
+      fail-fast: false # Keep fail-fast false for now, though with one job it's less critical
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
-        build_type: [RelWithDebInfo, Debug]
-        ui: [gui, cli]
-        scripting: [lua, noscripts]
-        exclude:
-          - build_type: Debug
-            ui: gui
-          - build_type: RelWithDebInfo
-            ui: cli
-          - build_type: RelWithDebInfo
-            scripting: noscripts
+        # Define the exact combination you want
+        os: [windows-latest]
+        build_type: [RelWithDebInfo] # Aseprite's "Release" for GUI is typically RelWithDebInfo
+        ui: [gui]
+        scripting: [lua]
+        # No need for 'exclude' as we're defining only one specific combination
+
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout Aseprite Source (Your Fork)
+      uses: actions/checkout@v4
       with:
-        submodules: 'recursive'
+        repository: Reec-3/aseprite # Point to your forked repository
+        ref: main # Assuming 'main' is the default branch of your fork
+        submodules: 'recursive' # Keep this, as Aseprite uses submodules
+
     - name: Install Dependencies
-      if: runner.os == 'Linux'
-      shell: bash
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y \
-          libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
-          libx11-dev libxcursor-dev libxi-dev libgl1-mesa-dev libfontconfig1-dev
+      # This step is conditional on Linux in the original, but for Windows,
+      # dependencies like Visual Studio are handled by msvc-dev-cmd.
+      # No apt-get needed for Windows.
+      if: runner.os == 'Linux' # Keep original condition to skip on Windows
+
     - name: Install Skia
-      if: ${{ matrix.ui == 'gui' }}
-      shell: bash
+      if: ${{ matrix.ui == 'gui' }} # This will be true as ui is 'gui'
+      shell: bash # Use bash as the script is bash-based
       run: |
+        # This uses Aseprite's own script to get the correct Skia URL, which is excellent.
         if [[ "${{ runner.os }}" == "Windows" ]] ; then
           this_dir=$(cygpath "${{ github.workspace }}")
         else
@@ -41,69 +47,88 @@ jobs:
         skia_url=$(source $this_dir/laf/misc/skia-url.sh | xargs)
         skia_file=$(basename $skia_url)
         curl --ssl-revoke-best-effort -L -o "$skia_file" "$skia_url"
-        unzip "$skia_file" -d skia
+        unzip -o "$skia_file" -d skia # Use -o to overwrite if exists
+
     - name: ccache
+      # ccache is for Linux/macOS, so this will be skipped on Windows
       uses: hendrikmuhs/ccache-action@v1.2.17
       if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
       with:
         key: ${{ matrix.os }}-${{ matrix.ui }}-${{ matrix.scripting }}-${{ matrix.build_type }}
-    - uses: aseprite/get-ninja@main
-    - uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Setup MSVC Environment
+      # This is critical for Windows builds
+      uses: ilammy/msvc-dev-cmd@v1
       if: runner.os == 'Windows'
+
     - name: Generating Makefiles
-      shell: bash
+      shell: bash # Use bash as the script contains bash logic
       run: |
         if [[ "${{ runner.os }}" == "Windows" ]] ; then
-          export enable_ccache=off
+          export enable_ccache=off # ccache is off on Windows
         else
           export enable_ccache=on
         fi
+        # These will be fixed by the matrix values: ui=gui, scripting=lua
+        export laf_backend=${{ matrix.ui == 'gui' && 'skia' || 'none' }}
+        export enable_scripting=${{ matrix.scripting == 'lua' && 'on' || 'off' }}
 
-        if [[ "${{ matrix.ui }}" == "gui" ]] ; then
-          export laf_backend=skia
-        else
-          export laf_backend=none
-        fi
-
-        if [[ "${{ matrix.scripting }}" == "lua" ]] ; then
-          export enable_scripting=on
-        else
-          export enable_scripting=off
-        fi
-
-        if [[ "${{ runner.os }}" == "macOS" ]] ; then
-          export skia_arch=arm64
-        else
-          export skia_arch=x64
-        fi
+        # For Windows, skia_arch should be x64
+        export skia_arch=x64
 
         cmake -S . -B build -G Ninja \
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 \
-          -DENABLE_TESTS=ON \
+          -DENABLE_TESTS=OFF \ # Tests are not needed for a release build artifact
           -DENABLE_SCRIPTING=$enable_scripting \
           -DENABLE_CCACHE=$enable_ccache \
           -DLAF_BACKEND=$laf_backend \
           -DSKIA_DIR=$(realpath skia) \
-          -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
+          -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch) # Skia output directory
+
     - name: Compiling
       shell: bash
       run: |
         cd build && ninja
-    - name: Running C++ Tests
-      shell: bash
+
+    # The original workflow had test steps. For a release build artifact,
+    # we can skip these to save time, or keep them if you want to verify.
+    # I've omitted them for a streamlined "get the app" process.
+
+    - name: Prepare Aseprite Application for Artifact
+      # This step collects the built executable and data files
+      # The executable for GUI builds is typically in build/bin/aseprite.exe on Windows
+      # when using the official build scripts.
       run: |
-        if [[ "${{ runner.os }}" == "Linux" ]] ; then
-          export XVFB=xvfb-run
-        fi
-        cd build && $XVFB ctest --output-on-failure
-    - name: Running CLI Tests
-      if: ${{ matrix.scripting == 'lua' }}
-      shell: bash
-      run: |
-        if [[ "${{ runner.os }}" == "Linux" ]] ; then
-          export XVFB=xvfb-run
-        fi
-        export ASEPRITE=$PWD/build/bin/aseprite
-        cd tests
-        $XVFB bash run-tests.sh
+        mkdir -p aseprite-build
+        $exe_path = "build/bin/aseprite.exe" # Common path for official Aseprite builds on Windows
+
+        if (Test-Path $exe_path) {
+          Copy-Item $exe_path -Destination "aseprite-build/"
+          Write-Host "Copied aseprite.exe to artifact directory."
+        } else {
+          Write-Host "Aseprite executable not found at $exe_path. Listing build directory for debugging:"
+          Get-ChildItem -Path "build" -Recurse # List the entire build directory
+          exit 1 # Fail if executable isn't found
+        }
+
+        # Aseprite needs its 'data' folder for icons, themes, etc.
+        # This is usually located at the root of the source directory.
+        if (Test-Path "data") {
+          Copy-Item -Path "data" -Destination "aseprite-build/data" -Recurse
+          Write-Host "Copied 'data' folder to artifact directory."
+        } else {
+          Write-Host "Aseprite 'data' folder not found at source root."
+        }
+
+        # List contents of the artifact directory to verify
+        Write-Host "Contents of aseprite-build directory:"
+        Get-ChildItem -Path "aseprite-build" -Recurse
+      shell: pwsh # Use PowerShell for Windows file operations
+
+    - name: Upload Aseprite Build as Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: aseprite-windows-gui-relwithdebinfo-${{ github.sha }}
+        path: aseprite-build/
+        retention-days: 7
+        if-no-files-found: error # Ensure the step fails if nothing is uploaded
