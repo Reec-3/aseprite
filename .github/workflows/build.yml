@@ -8,37 +8,29 @@ on:
 
 jobs:
   build:
-    # We simplify the matrix to a single, desired combination
     runs-on: windows-latest
     strategy:
-      fail-fast: false # Keep fail-fast false for now, though with one job it's less critical
+      fail-fast: false
       matrix:
-        # Define the exact combination you want
         os: [windows-latest]
-        build_type: [RelWithDebInfo] # Aseprite's "Release" for GUI is typically RelWithDebInfo
+        build_type: [RelWithDebInfo]
         ui: [gui]
         scripting: [lua]
-        # No need for 'exclude' as we're defining only one specific combination
 
     steps:
-    - name: Checkout Aseprite Source (Your Fork)
+    - name: Checkout Aseprite Source (Your Fork: Reec-3/aseprite)
       uses: actions/checkout@v4
       with:
-        repository: Reec-3/aseprite # Point to your forked repository
-        ref: main # Assuming 'main' is the default branch of your fork
-        submodules: 'recursive' # Keep this, as Aseprite uses submodules
+        repository: Reec-3/aseprite # THIS MUST BE YOUR FORK
+        ref: main # Assumes 'main' is the default branch of your fork
+        submodules: 'recursive'
 
-    - name: Install Dependencies
-      # This step is conditional on Linux in the original, but for Windows,
-      # dependencies like Visual Studio are handled by msvc-dev-cmd.
-      # No apt-get needed for Windows.
-      if: runner.os == 'Linux' # Keep original condition to skip on Windows
+    # Removed 'Install Dependencies' step entirely as it's for Linux only and caused a syntax error.
 
     - name: Install Skia
-      if: ${{ matrix.ui == 'gui' }} # This will be true as ui is 'gui'
-      shell: bash # Use bash as the script is bash-based
+      if: ${{ matrix.ui == 'gui' }}
+      shell: bash
       run: |
-        # This uses Aseprite's own script to get the correct Skia URL, which is excellent.
         if [[ "${{ runner.os }}" == "Windows" ]] ; then
           this_dir=$(cygpath "${{ github.workspace }}")
         else
@@ -47,57 +39,41 @@ jobs:
         skia_url=$(source $this_dir/laf/misc/skia-url.sh | xargs)
         skia_file=$(basename $skia_url)
         curl --ssl-revoke-best-effort -L -o "$skia_file" "$skia_url"
-        unzip -o "$skia_file" -d skia # Use -o to overwrite if exists
+        unzip -o "$skia_file" -d skia
 
-    - name: ccache
-      # ccache is for Linux/macOS, so this will be skipped on Windows
-      uses: hendrikmuhs/ccache-action@v1.2.17
-      if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
-      with:
-        key: ${{ matrix.os }}-${{ matrix.ui }}-${{ matrix.scripting }}-${{ matrix.build_type }}
+    # Removed 'ccache' step entirely as it's for Linux/macOS only and caused a syntax error.
 
     - name: Setup MSVC Environment
-      # This is critical for Windows builds
       uses: ilammy/msvc-dev-cmd@v1
-      if: runner.os == 'Windows'
+      if: runner.os == 'Windows' # Only runs on Windows
 
     - name: Generating Makefiles
-      shell: bash # Use bash as the script contains bash logic
+      shell: bash
       run: |
         if [[ "${{ runner.os }}" == "Windows" ]] ; then
           export enable_ccache=off # ccache is off on Windows
         else
-          export enable_ccache=on
+          export enable_ccache=on # This branch won't be taken for Windows
         fi
-        # These will be fixed by the matrix values: ui=gui, scripting=lua
         export laf_backend=${{ matrix.ui == 'gui' && 'skia' || 'none' }}
         export enable_scripting=${{ matrix.scripting == 'lua' && 'on' || 'off' }}
-
-        # For Windows, skia_arch should be x64
-        export skia_arch=x64
+        export skia_arch=x64 # Fixed for x64 Windows build
 
         cmake -S . -B build -G Ninja \
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-          -DENABLE_TESTS=OFF \ # Tests are not needed for a release build artifact
+          -DENABLE_TESTS=OFF \
           -DENABLE_SCRIPTING=$enable_scripting \
           -DENABLE_CCACHE=$enable_ccache \
           -DLAF_BACKEND=$laf_backend \
           -DSKIA_DIR=$(realpath skia) \
-          -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch) # Skia output directory
+          -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
 
     - name: Compiling
       shell: bash
       run: |
         cd build && ninja
 
-    # The original workflow had test steps. For a release build artifact,
-    # we can skip these to save time, or keep them if you want to verify.
-    # I've omitted them for a streamlined "get the app" process.
-
     - name: Prepare Aseprite Application for Artifact
-      # This step collects the built executable and data files
-      # The executable for GUI builds is typically in build/bin/aseprite.exe on Windows
-      # when using the official build scripts.
       run: |
         mkdir -p aseprite-build
         $exe_path = "build/bin/aseprite.exe" # Common path for official Aseprite builds on Windows
@@ -107,23 +83,19 @@ jobs:
           Write-Host "Copied aseprite.exe to artifact directory."
         } else {
           Write-Host "Aseprite executable not found at $exe_path. Listing build directory for debugging:"
-          Get-ChildItem -Path "build" -Recurse # List the entire build directory
-          exit 1 # Fail if executable isn't found
+          Get-ChildItem -Path "build" -Recurse
+          exit 1
         }
 
-        # Aseprite needs its 'data' folder for icons, themes, etc.
-        # This is usually located at the root of the source directory.
         if (Test-Path "data") {
           Copy-Item -Path "data" -Destination "aseprite-build/data" -Recurse
           Write-Host "Copied 'data' folder to artifact directory."
         } else {
           Write-Host "Aseprite 'data' folder not found at source root."
         }
-
-        # List contents of the artifact directory to verify
         Write-Host "Contents of aseprite-build directory:"
         Get-ChildItem -Path "aseprite-build" -Recurse
-      shell: pwsh # Use PowerShell for Windows file operations
+      shell: pwsh
 
     - name: Upload Aseprite Build as Artifact
       uses: actions/upload-artifact@v4
@@ -131,4 +103,4 @@ jobs:
         name: aseprite-windows-gui-relwithdebinfo-${{ github.sha }}
         path: aseprite-build/
         retention-days: 7
-        if-no-files-found: error # Ensure the step fails if nothing is uploaded
+        if-no-files-found: error
