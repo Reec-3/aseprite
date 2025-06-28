@@ -1,0 +1,97 @@
+name: Build Aseprite (Windows)
+
+on:
+  push:
+    branches:
+      - main # Or your default branch where you push changes
+  workflow_dispatch: # Allows manual triggering from the GitHub UI
+
+jobs:
+  build-windows:
+    runs-on: windows-latest # Use the latest Windows runner
+
+    env:
+      # Set up environment variables for Visual Studio.
+      # The exact path might vary slightly with VS versions, but 'vswhere' finds it.
+      # Using 'vswhere' ensures we pick up the correct VS environment.
+      # We need to find the Developer Command Prompt for MSVC toolchain.
+      # This is automatically handled by the 'vcvarsall.bat' call.
+
+    steps:
+      - name: Debug: Print GitHub Context
+        run: |
+          echo "GitHub Workspace: ${{ github.workspace }}"
+          echo "GitHub Repository: ${{ github.repository }}"
+          echo "GitHub Ref: ${{ github.ref }}"
+          git config --get http.useragent # Verify git config
+
+      - name: Checkout Aseprite Source
+        uses: actions/checkout@v4
+        with:
+          repository: aseprite/aseprite
+          ref: master # Or a specific stable tag like 'v1.3.2'
+          path: aseprite
+
+      - name: Checkout Skia Source
+        uses: actions/checkout@v4
+        with:
+          repository: aseprite/skia
+          # IMPORTANT: Verify this Skia branch is compatible with your Aseprite version.
+          # Refer to Aseprite's official build instructions for the precise branch.
+          ref: aseprite-m102 # Example: This was compatible with Aseprite 1.2.x/1.3-beta
+          path: skia
+
+      - name: Setup MSVC Environment
+        # This step uses the "Developer Command Prompt" functionality
+        # to set up the correct environment variables for MSVC, CMake, Ninja, etc.
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          # Verify some env vars are set
+          echo "VCINSTALLDIR: %VCINSTALLDIR%"
+          echo "PATH: %PATH%"
+          where cl
+        shell: cmd # Use cmd.exe to correctly run vcvars64.bat
+
+      - name: Configure and Build Skia
+        working-directory: skia
+        run: |
+          # The Python executable should be on PATH from the runner environment
+          # or set by vcvars64.bat.
+          # skia_gl_standard=gl is for desktop OpenGL. For ANGLE (DirectX backend for Skia),
+          # you'd use 'skia_gl_standard=angle'
+          # 'skia_use_angle=true' would also be needed if using ANGLE.
+          # For simpler setup, desktop OpenGL is often fine if drivers support it.
+          python tools/gn/bootstrap/bootstrap.py --skip-gn-binaries
+          ./bin/gn gen out/Release-x64 --args="is_debug=false skia_use_system_expat=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_icu=false skia_enable_fontmgr_empty=false skia_enable_skottie=false skia_enable_tools=false skia_enable_gpu=true skia_gl_standard=gl"
+          ninja -C out/Release-x64
+        shell: cmd # Use cmd.exe for Skia build steps to ensure VS environment is active
+
+      - name: Configure and Build Aseprite
+        working-directory: aseprite
+        run: |
+          mkdir build
+          cd build
+          # -DCMAKE_BUILD_TYPE=RelWithDebInfo for optimized build with debug info
+          # If you truly want a pure "Release" build with no debug symbols,
+          # change 'RelWithDebInfo' to 'Release' here and in the build command.
+          # -G "Ninja" is important as we're using Ninja for the build system.
+          cmake `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DLAF_BACKEND=skia `
+            -DSKIA_DIR=../../skia `
+            -DSKIA_OUT_DIR=../../skia/out/Release-x64 `
+            -G "Ninja" ` # Specify Ninja generator for CMake
+            ..
+          cmake --build . --config RelWithDebInfo --verbose # Ensure it builds with Ninja and correct config
+        shell: cmd # Use cmd.exe for Aseprite build steps
+
+      - name: Prepare Aseprite Application for Artifact
+        run: |
+          mkdir -p aseprite-build
+          # The executable path for Windows builds is typically in build/<Config>/aseprite.exe
+          # Common configs: Release, RelWithDebInfo, Debug
+          $build_config = "RelWithDebInfo" # Match CMAKE_BUILD_TYPE
+          $exe_path = "aseprite/build/${build_config}/aseprite.exe"
+
+          if (Test-Path $exe_path) {
+            Copy-Item $exe_path -
