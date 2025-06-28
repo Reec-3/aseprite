@@ -21,15 +21,9 @@ jobs:
     - name: Checkout Aseprite Source
       uses: actions/checkout@v4
       with:
-        # ************************************************************
-        # * THIS IS THE CRITICAL LINE THAT MUST BE YOUR REPO *
-        # ************************************************************
-        repository: Reec-3/aseprite
+        repository: Reec-3/aseprite # THIS MUST BE YOUR FORK
         ref: main # Assumes 'main' is the default branch of your fork
         submodules: 'recursive'
-
-    - name: Install Dependencies
-      if: runner.os == 'Linux' # This step will be skipped on Windows
 
     - name: Install Skia
       if: ${{ matrix.ui == 'gui' }}
@@ -45,15 +39,9 @@ jobs:
         curl --ssl-revoke-best-effort -L -o "$skia_file" "$skia_url"
         unzip -o "$skia_file" -d skia
 
-    - name: ccache
-      if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }} # Skipped on Windows
-      uses: hendrikmuhs/ccache-action@v1.2.17
-      with:
-        key: ${{ matrix.os }}-${{ matrix.ui }}-${{ matrix.scripting }}-${{ matrix.build_type }}
-
     - name: Setup MSVC Environment
       uses: ilammy/msvc-dev-cmd@v1
-      if: runner.os == 'Windows' # Only runs on Windows
+      if: runner.os == 'Windows'
 
     - name: Generating Makefiles
       shell: bash
