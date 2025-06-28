@@ -18,7 +18,7 @@ jobs:
         scripting: [lua]
 
     steps:
-    - name: Checkout Aseprite Source (Your Fork: Reec-3/aseprite)
+    - name: Checkout Aseprite Source
       uses: actions/checkout@v4
       with:
         # ************************************************************
